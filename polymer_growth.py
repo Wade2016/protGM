@@ -37,187 +37,154 @@ import functools
 import openmm_potentials as omp
 
 
-beta = omp.compute_beta(298)
-
 
 # need to guard for infs/zeros in logs here
 def safe_log(x):
-    if x <= 0:
-        return -np.inf
-    return np.log(x)
+    if x == 0.0:
+        logx = -np.inf
+    else:
+        logx = np.log(x)
+
+    return logx
 
 
 # return the energy of a global configuration of the graph
-def get_betaU_for_state(some_graph,global_state):
+# need to pass the inverse node ordering map to get the correct position
+# of the node in the global state when the nodes are added in random order
+
+def get_betaU_for_state(some_graph,global_state,inv_node_map):
 
     all_node_pots = nx.get_node_attributes(some_graph,'node_potential')
     all_edge_pots = nx.get_edge_attributes(some_graph,'edge_potential')
 
     betaU_state_node = 0.0
     for node in some_graph.nodes_iter():
-        phi_n = all_node_pots[node][global_state[node],0] # 0 cause col vector is 2-dim
+        k = inv_node_map[node]
+        node_state = global_state[k]
+        phi_n = all_node_pots[node][node_state,0] # 0 cause col vector is 2-dim
         betaU_state_node += -safe_log(phi_n)
 
     betaU_state_edge = 0.0
     for edge in some_graph.edges_iter():
         n_a, n_b = edge
-        phi_e = all_edge_pots[edge][global_state[n_a]][global_state[n_b]]
+        i = inv_node_map[n_a]
+        j = inv_node_map[n_b]
+        phi_e = all_edge_pots[edge][global_state[i]][global_state[j]]
         betaU_state_edge += -safe_log(phi_e)
 
     betaU_state = (betaU_state_node+betaU_state_edge)
 
     return betaU_state
 
-# shortcut for tuple sorting by energy
-def get_best_states_ens(state_en_pairs,N=10):
-    return sorted(state_en_pairs, key=lambda tup: tup[1])[:N]
+
+# boltzman sampling rather than just going for the lowest n energy states
+# betaE_list is used to weight the samples
+def boltzman_sample_state_ens(state_list,betaE_list,sample_size=10):
+
+    state_inds = [i for (i,s) in enumerate(state_list)]
+    finite_inds = [i for i in state_inds if (betaE_list[i]<np.inf and betaE_list[i]>-np.inf)]
+
+    finite_states = [state_list[i] for i in finite_inds]
+    finite_betaE_list = [betaE_list[i] for i in finite_inds]
+    if np.any(~np.isfinite(finite_betaE_list)):
+        print(finite_betaE_list)
+
+    finite_beta_Emin = np.min(finite_betaE_list)
+    finite_state_probs = np.exp( -(np.array(finite_betaE_list)-finite_beta_Emin) )
+    finite_state_probs /= np.sum(finite_state_probs)
+
+    finite_inds_sample = np.random.choice(range(len(finite_states)), size=sample_size, replace=True, p=finite_state_probs)
+    state_sample = [finite_states[i] for i in finite_inds_sample]
+
+    return state_sample
 
 
-# NONSTOCHASTIC
-def polymer_growth_sampling(g,sample_size=10):
+# safer way to compute the free energy
+#
+#     betaF   = -np.log(np.sum(np.exp(-betaEs))/sample_size)
+#             = -np.log(np.exp(-betaEmin)*np.sum(np.exp(-(betaEs-betaEmin)))/sample_size)
+#             = -np.log(np.exp(-betaEmin)) - np.log(np.sum(np.exp(-(betaEs-betaEmin)))) + np.log(sample_size)
+#             = betaEmin - np.log(np.sum(np.exp(-(betaEs-betaEmin)))) + np.log(sample_size)
+
+def calc_betaF(betaEs,sample_size,phys=True):
+    betaEs = np.array(betaEs)
+    betaEmin = np.min(betaEs)
+    betaF = betaEmin - np.log(np.sum(np.exp(-(betaEs-betaEmin)))) + np.log(sample_size)
+    return betaF
+
+
+# Boltzmann sampling-based algorithm
+def polymer_growth(g,sample_size=10,shuffle=False,phys=False):
     """
     polymer growth sampling of a protein/peptide graph
     inputs:
         g: graph / markov random field of peptide/protein
         sample_size: number of states we downsample to as each residue is added
+        shuffle: reorder nodes, or not
+        phys: correct for phase space volumes or not
     outputs:
-        best_state_en_pairs: list of state/energy tuples for the best sample_size states
+        betaF: list of delta betaF values for adding each successive nodes (and it's edges) to the graph
+        betaU: list of delta betaU values for adding each successive nodes (and it's edges) to the graph
+        betaTS: list of delta betaTS values for adding each successive nodes (and it's edges) to the graph
+        note: if phys = true, the phys correction is appended to these lists
     """
+
     # get the node indices
-    node_indices = [n for n in g.nodes_iter()]
-    for i in node_indices:
+    nodes = np.array([n for n in g.nodes_iter()])
+    all_node_state_indices = nx.get_node_attributes(g,'node_state_indices')
+
+    # add the nodes in a random order or not
+    if shuffle:
+        node_order = np.random.permutation(nodes)
+    else:
+        node_order = nodes
+
+    node_map = dict(zip(nodes,node_order))
+    node_map_back = dict(zip(node_order,nodes))
+
+    all_node_state_indices_ordered = [all_node_state_indices[k] for k in node_order]
+
+    # array of delta beta F/U/TS values
+    delta_betaF = np.zeros(len(nodes))
+
+    # initialize 'polymer' -- each state is a list, saved_states is a list of lists
+    saved_states = [[]]
+    saved_ens = [0.0]
+
+    # successively add each node, calculate delta F, and downsample the product state-space
+    for k,n in enumerate(node_order):
 
         # h is a temp graph with nodes/edges > i removed
         h = g.copy()
-        h.remove_nodes_from(node_indices[i+1:])
+        h.remove_nodes_from(node_order[k+1:])
 
-        # if node zero, initialize polymer
-        if i == 0:
-            initial_states = [[state] for state in nx.get_node_attributes(g,'node_state_indices')[0]]
-            state_en_pairs = [(state,get_betaU_for_state(h,state)) for state in initial_states]
-            best_state_en_pairs = get_best_states_ens(state_en_pairs,N=sample_size)
-            old_states = [state for (state,en) in best_state_en_pairs]
+        new_states = []
+        delta_ens = []
 
-        # for other nodes, add the node to the existing polymer and resample
-        else:
-            new_node_states = nx.get_node_attributes(h,'node_state_indices')[i]
-            new_state_en_pairs = []
-            for old_state,new_node_state in it.product(old_states,new_node_states):
-                new_tot_state = old_state+[new_node_state]
-                new_state_en_pairs.append((new_tot_state, get_betaU_for_state(h,new_tot_state)))
-                best_state_en_pairs = get_best_states_ens(new_state_en_pairs,N=sample_size)
-                old_states = [state for (state,en) in best_state_en_pairs]
+        # check all the new states we get by adding in a new node to the old states
+        for node_state in all_node_state_indices_ordered[k]:
+            for i,old_state in enumerate(saved_states):
+                new_state = old_state+[node_state]
+                new_states.append(new_state)
+                new_en = get_betaU_for_state(h,new_state,node_map_back)
 
-    return best_state_en_pairs
+                delta_en = new_en - saved_ens[i]
+                delta_ens.append(delta_en)
 
+        delta_betaF[k] = calc_betaF(delta_ens,len(saved_states))
+        saved_states = boltzman_sample_state_ens(new_states,delta_ens,sample_size=sample_size)
+        saved_ens = [get_betaU_for_state(h,state,node_map_back) for state in saved_states]
 
-# blotzman sampling rather than just going for the lowest n energy states
-def boltzman_sample_state_ens(state_betaE_list,sample_size=10):
-    betaE_list = [energy for (state,energy) in state_betaE_list]
-    state_list = [state for (state,energy) in state_betaE_list]
-    state_inds = [i for (i,state_betaE) in enumerate(state_betaE_list)]
-
-    beta_Emin = np.min(betaE_list)
-    state_probs = np.exp( -(np.array(betaE_list)-beta_Emin) )
-    state_probs /= np.sum(state_probs)
-
-    my_sample = np.random.choice(state_inds, size=sample_size, replace=True, p=state_probs)
-    state_betaE_sample = [state_betaE_list[i] for i in my_sample]
-
-    return state_betaE_sample
-
-# boltzmann sampling-based algorithm --  use this one
-def stochastic_polymer_growth_sampling(g,sample_size=10):
-    """
-    polymer growth sampling of a protein/peptide graph
-    inputs:
-        g: graph / markov random field of peptide/protein
-        sample_size: number of states we downsample to as each residue is added
-    outputs:
-        best_state_en_pairs: list of state/energy tuples for the sampled states
-    """
-    # get the node indices
-    node_indices = [n for n in g.nodes_iter()]
-
-    #successively add each node and downsample the product state-space
-    for i in node_indices:
-
-        # h is a temp graph with nodes/edges > i removed
-        h = g.copy()
-        h.remove_nodes_from(node_indices[i+1:])
-
-        # if node zero, initialize polymer
-        if i == 0:
-            initial_states = [[state] for state in nx.get_node_attributes(g,'node_state_indices')[0]]
-            state_en_pairs = [(state,get_betaU_for_state(h,state)) for state in initial_states]
-            best_state_en_pairs = boltzman_sample_state_ens(state_en_pairs,sample_size=sample_size)
-            old_states = [state for (state,en) in best_state_en_pairs]
-
-        # for other nodes, add the node to the existing polymer and resample
-        else:
-            new_node_states = nx.get_node_attributes(h,'node_state_indices')[i]
-            new_state_en_pairs = []
-
-            # check all the new states we get by adding in a new node
-            for old_state,new_node_state in it.product(old_states,new_node_states):
-                new_tot_state = old_state+[new_node_state]
-                new_state_en_pairs.append((new_tot_state, get_betaU_for_state(h,new_tot_state)))
-                best_state_en_pairs = boltzman_sample_state_ens(new_state_en_pairs,sample_size=sample_size)
-                old_states = [state for (state,en) in best_state_en_pairs]
-
-    return best_state_en_pairs
-
-# given a graph and a list of energies, calculate betaU
-def get_betaU(graph,phys=False,sample_size=100):
-    pg_sample = stochastic_polymer_growth_sampling(graph,sample_size=sample_size)
-    betaU_list = [energy for (state,energy) in pg_sample]
-
-    betaUmin = np.min(betaU_list)
-    Z0 = np.sum([np.exp(-(betaU-betaUmin)) for betaU in betaU_list])
-
-    betaUZ0 = np.sum([betaU*np.exp(-(betaU-betaUmin)) for betaU in betaU_list])
-    betaU = betaUZ0/Z0
-    if phys:
-        pass
-
-    return betaU
-
-# given a graph and a list of energies, calculate betaTS
-def get_betaTS(graph,phys=False,sample_size=100):
-    pg_sample = stochastic_polymer_growth_sampling(graph,sample_size=sample_size)
-    betaU_list = [energy for (state,energy) in pg_sample]
-
-    betaUmin = np.min(betaU_list)
-    bfacts = np.array([np.exp(-(betaU-betaUmin)) for betaU in betaU_list])
-    p = bfacts/np.sum(bfacts)
-    betaTS = -np.sum(p*np.log(p))
+    # after all the nodes are added and the graph is rebuilt, sompute our stats:
+    betaF = np.sum(delta_betaF)
+    betaU = np.mean([get_betaU_for_state(h,state,node_map_back) for state in saved_states])
+    betaTS = betaU - betaF
 
     if phys:
-        d_c,d_h = graph.graph['num_chis']
-        k_c,k_h = graph.graph['grid_points_per_chi']
+        d_c,d_h = g.graph['num_chis']
+        k_c,k_h = g.graph['grid_points_per_chi']
         discretization_correction = d_c*np.log(k_c/(2*np.pi)) + d_h*np.log(k_h/(2*np.pi/3))
+        betaF += discretization_correction
         betaTS -= discretization_correction
 
-    return betaTS
-
-# given a graph and a list of energies, calculate betaG
-def get_betaG(graph,phys=False,sample_size=100):
-    pg_sample = stochastic_polymer_growth_sampling(graph,sample_size=sample_size)
-    betaU_list = [energy for (state,energy) in pg_sample]
-
-    betaU = get_betaU(graph,phys=phys,sample_size=sample_size)
-    betaTS = get_betaTS(graph,phys=phys,sample_size=sample_size)
-    betaG = betaU - betaTS
-    return betaG
-
-# given a graph and a list of energies, calculate betaTS indirectly
-def get_betaTS_indirect(graph,phys=False,sample_size=100):
-    betaU = get_betaU(graph,phys=phys,sample_size=sample_size)
-    betaG = get_betaG(graph,phys=phys,sample_size=sample_size)
-    betaTS = betaU - betaG
-    if phys:
-        d_c,d_h = graph.graph['num_chis']
-        k_c,k_h = graph.graph['grid_points_per_chi']
-        discretization_correction = d_c*np.log(k_c/(2*np.pi)) + d_h*np.log(k_h/(2*np.pi/3))
-        betaTS -= discretization_correction
-    return betaTS
+    return betaF,betaU,betaTS
