@@ -192,11 +192,12 @@ def runBP(some_graph, N_BPiters=100, epsilon=1e-12, verbose=False):
                 if verbose:
                     if np.isnan(np.min(new_messages[j][i])):
                         # print psi_ij
+                        print i,j
                         print x
                         print new_messages[j][i]
 
                 # normalize the new message
-                assert np.sum(new_messages[j][i]) >= 0.0
+                assert np.sum(new_messages[j][i]) >= 0.0, "message is f-ed up: %r" % new_messages[j][i]
                     # new_messages[j][i] = np.ones_like(new_messages[j][i])
                 new_messages[j][i] = new_messages[j][i]/np.sum(new_messages[j][i])
 
@@ -347,7 +348,7 @@ def calculate_bethe_Z(some_graph, phys=False, verbose=False):
 def return_beta_UandTS(some_graph,phys=False):
 
     clean_up_graph(some_graph)
-    
+
     node_beliefs,edge_beliefs,messages,isconverged,deltapath = runBP(some_graph)
     betaU_total = calculate_betaU_total(some_graph,node_beliefs,edge_beliefs)
     betaTS_total = calculate_betaTS_total(some_graph,node_beliefs,edge_beliefs,phys=phys)
