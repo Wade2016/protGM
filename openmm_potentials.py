@@ -1403,11 +1403,21 @@ def make_cutoff_graph(pdb,positions=None,cutoff=Quantity(value=1.0,unit=nanomete
     return g
 
 
+def prune_non_neighbors(graph,node_list):
+    """
+    prunes graph in place, keeping only nodes in node_list and their direct neighbors
+    """
+    nodes_to_keep = set(node_list)
+    for n in node_list:
+        nodes_to_keep |= set(graph.neighbors(n))
+    nodes_to_remove = set(graph.nodes()) - nodes_to_keep
+    graph.remove_nodes_from(nodes_to_remove)
+
 ############################################
 # main fuction to construct graph from pdb #
 ############################################
 
-def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff=Quantity(value=1.0,unit=nanometer), beta=compute_beta(298), debug=False, threads=None):
+def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff=Quantity(value=1.0,unit=nanometer), beta=compute_beta(298), pruned=False, debug=False, threads=None):
     """
     make_graph takes a pdb file and constructs a markov random field
     encoding the single and paiwise energetic interations of each residue in the pdb.
@@ -1445,6 +1455,11 @@ def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff
 
     # initialize graph and add nodes and edges based on cut-off distance
     graph_name = make_cutoff_graph(pdb,positions=original_positions,cutoff=cutoff)
+
+    # if pruned = True, get rid of all nodes that aren't connected to the selected residues
+    if (res_select is not None) & pruned:
+        prune_non_neighbors(graph_name,res_select)
+
 
     # get list of edges for later
     edges = [edge for edge in graph_name.edges_iter()]
