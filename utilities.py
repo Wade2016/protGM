@@ -1,3 +1,5 @@
+import numpy as np
+
 # from http://people.duke.edu/~ccc14/pcfb/analysis.html
 def bootstrap(data, statistic=np.mean, num_samples=10000, alpha=0.05):
     """Returns bootstrap estimate of 100.0*(1-alpha) CI for statistic."""
