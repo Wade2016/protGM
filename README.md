@@ -58,7 +58,7 @@ conda install <some_package>
 - clean out old chi angle getting and setting code
 
 
-## "Future Work" (haha)
+## "Future Work"
 - pruning states that are clashes
 - smarter than uniform-grid sampling
   - higher sample density for "earlier" chis?
