@@ -1,23 +1,18 @@
 from __future__ import print_function
 
 import sys
-from sys import stdout
 import itertools as it
 
-# import dill
 from multiprocessing import Pool
-from multiprocessing.dummy import Pool as ThreadPool
-import functools
 
+import networkx as nx
 import numpy as np
 
+# pylint: disable=wildcard-import
 from simtk.openmm.app import *
 from simtk.openmm import *
 from simtk.unit import *
-
-import mdtraj as md
-
-import networkx as nx
+# pylint: enable=wildcard-import
 
 
 ###############################
@@ -1432,7 +1427,7 @@ def make_cutoff_graph(pdb, positions=None, cutoff=Quantity(value=1.0, unit=nanom
     CA_positions = [positions[CA_ind] for CA_ind in all_CA_inds]
 
     res_indices = [i for (i, obj) in enumerate(pdb.topology.residues())]
-    g = G = nx.Graph()
+    g = nx.Graph()
     g.add_nodes_from(res_indices)
 
     for r in pdb.topology.residues():
@@ -1472,10 +1467,12 @@ def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff
         pdb_file: (file) any pdb file comppatible with openmm.  assumed to not need hydrogens added etc.
         N_chi_samples: samples per chi dof
         N_h_chi_samples: samples per h_chi dof
-        res_select: if not None, a list of residue indices to make nodes of, other residues only have one state (ie static)
+        res_select: if not None, a 0-indexed list of residue indices to make nodes of, other residues only have one state (ie static)
         cutoff: (quantity) how close do nodes need to be to have and edge between them?
         beta: (quantity) the inverse temperature, in units of moles per energy
+        pruned: (bool) only keep nodes in res_select and their immediate neighbors
         debug: (bool) whether to print out debug messages
+        threads: if not None, an integer equal to how many threads to use in parallel
     outputs:
 
     """
@@ -1508,6 +1505,7 @@ def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff
     # if pruned = True, get rid of all nodes that aren't connected to the selected residues
     if (res_select is not None) & pruned:
         prune_non_neighbors(graph_name, res_select)
+        res_indices = graph_name.nodes()
 
     # get list of edges for later
     edges = [edge for edge in graph_name.edges_iter()]
@@ -1518,11 +1516,20 @@ def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff
     graph_name.graph['units'] = str(simulation.context.getState(getEnergy=True).getPotentialEnergy()).split(' ')[1]
     graph_name.graph['reference_energy'] = ref_energy
 
-    all_chi_dofs = [get_num_chis_and_hchis(i, pdb, res_select=res_select) for i in res_indices]
+    all_chi_dofs = {}
+    for i in res_indices:
+        all_chi_dofs[i] = get_num_chis_and_hchis(i, pdb, res_select=res_select)
 
-    num_chis_samples_per_res = [(N_chi_samples**n_chi) * (N_h_chi_samples**n_hchi) for (n_chi, n_hchi) in all_chi_dofs]
+    num_chis_samples_per_res = {}
+    for i in res_indices:
+        n_chi, n_hchi = all_chi_dofs[i]
+        num_chis_samples_per_res[i] = (N_chi_samples**n_chi) * (N_h_chi_samples**n_hchi)
 
-    graph_name.graph['num_chis'] = map(sum, zip(*all_chi_dofs))
+    tot_num_chis = 0
+    for  i in res_indices:
+        tot_num_chis += num_chis_samples_per_res[i]
+    graph_name.graph['num_chis'] = tot_num_chis
+
     graph_name.graph['grid_points_per_chi'] = (N_chi_samples, N_h_chi_samples)
 
     # add indices of node state -- seems like there should be a slick way to avoid this but can't figure it out
