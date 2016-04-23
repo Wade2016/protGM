@@ -1516,20 +1516,16 @@ def make_graph(pdb_file, N_chi_samples, N_h_chi_samples, res_select=None, cutoff
     graph_name.graph['units'] = str(simulation.context.getState(getEnergy=True).getPotentialEnergy()).split(' ')[1]
     graph_name.graph['reference_energy'] = ref_energy
 
-    all_chi_dofs = {}
-    for i in res_indices:
-        all_chi_dofs[i] = get_num_chis_and_hchis(i, pdb, res_select=res_select)
-
+    tot_num_chis = 0
+    tot_num_hchis = 0
     num_chis_samples_per_res = {}
     for i in res_indices:
-        n_chi, n_hchi = all_chi_dofs[i]
+        n_chi, n_hchi = get_num_chis_and_hchis(i, pdb, res_select=res_select)
+        tot_num_chis += n_chi
+        tot_num_hchis += n_hchi
         num_chis_samples_per_res[i] = (N_chi_samples**n_chi) * (N_h_chi_samples**n_hchi)
 
-    tot_num_chis = 0
-    for  i in res_indices:
-        tot_num_chis += num_chis_samples_per_res[i]
-    graph_name.graph['num_chis'] = tot_num_chis
-
+    graph_name.graph['num_chis'] = (tot_num_chis,tot_num_hchis)
     graph_name.graph['grid_points_per_chi'] = (N_chi_samples, N_h_chi_samples)
 
     # add indices of node state -- seems like there should be a slick way to avoid this but can't figure it out

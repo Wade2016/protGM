@@ -102,8 +102,7 @@ def runBP(some_graph, N_BPiters=100, epsilon=1e-12, verbose=False):
             print N_BPiter
         for node_from in some_graph.nodes_iter():
             for node_to in some_graph.neighbors(node_from):
-                nodes_gather = [n for n in some_graph.neighbors(
-                    node_from) if n != node_to]
+                nodes_gather = [n for n in some_graph.neighbors(node_from) if n != node_to]
 
                 i, j = node_to, node_from
                 # print "node_to = ", node_to, "node_from = ", node_from
@@ -116,34 +115,47 @@ def runBP(some_graph, N_BPiters=100, epsilon=1e-12, verbose=False):
                 # passed
                 x = copy.deepcopy(some_graph.node[j]['node_potential'])
 
-                # if there are other neighbors, gather new messages from them
-                if nodes_gather:
-                    for k in nodes_gather:
-                        x *= old_messages[k][j]  # messages are [from][to]
+                # if the node passing the message only has one state, short circuit
+                # the message gathering etc, and just pass the 1x1 identity.
+                if x.shape == (1,1):
+                    new_messages[j][i] = np.ones_like(x)
 
-                # hit node i's info with the ij edge potential and pass to j
-                psi_ij = copy.deepcopy(some_graph.edge[i][j]['edge_potential'])
+                # if the node isn't trivial, gather incoming messages, process, and pass a new one
+                else:
+                    # if there are other neighbors, gather new messages from them
+                    if nodes_gather:
+                        for k in nodes_gather:
+                            # if np.isnan(np.min(old_messages[k][j])):
+                                # print k, j
+                                # print old_messages[k][j]
+                                # old_messages[k][j] = np.ones_like(old_messages[k][j])
+                                # print old_messages[k][j]
+                            x *= old_messages[k][j]  # messages are [from][to]
 
-                if j < i:
-                    psi_ij = psi_ij.T
+                    # hit node i's info with the ij edge potential and pass to j
+                    psi_ij = copy.deepcopy(some_graph.edge[i][j]['edge_potential'])
 
-                # print "x = ", x
-                # print "psi_ij = ", psi_ij
+                    if j < i:
+                        psi_ij = psi_ij.T
 
-                # node pots and messages are now col vectors
-                new_messages[j][i] = psi_ij.dot(x)
-                if verbose:
+                    # print "x = ", x
+                    # print "psi_ij = ", psi_ij
+
+                    # node pots and messages are now col vectors
+                    new_messages[j][i] = psi_ij.dot(x)
                     if np.isnan(np.min(new_messages[j][i])):
                         # print psi_ij
                         print i, j
-                        print x
-                        print new_messages[j][i]
+                        print "x = ", x
+                        print "psi_ij = ", psi_ij
+                        print "new_message = ", new_messages[j][i]
 
-                # normalize the new message
-                assert np.sum(new_messages[j][i]) >= 0.0, "message is f-ed up: %r" % new_messages[j][i]
-                # new_messages[j][i] = np.ones_like(new_messages[j][i])
-                new_messages[j][i] = new_messages[j][
-                    i] / np.sum(new_messages[j][i])
+                    # normalize the new message
+                    assert np.sum(new_messages[j][i]) >= 0.0, "message is f-ed up: %r" % new_messages[j][i]
+
+                    new_messages[j][i] = new_messages[j][i] / np.sum(new_messages[j][i])
+                    # if np.isnan(np.min(new_messages[j][i])):
+                    #     new_messages[j][i] = np.ones_like(new_messages[j][i])
 
         # check for convergence
         if verbose:
