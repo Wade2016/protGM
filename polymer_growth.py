@@ -20,7 +20,7 @@ def safe_log(x):
     return logx
 
 # pylint: disable=too-many-locals
-def get_betaU_for_state(some_graph, global_state, inv_node_map):
+def get_betaU_for_state(some_graph, global_state):
     """
     return the energy of a global configuration of the graph
     need to pass the inverse node ordering map to get the correct position
@@ -32,18 +32,22 @@ def get_betaU_for_state(some_graph, global_state, inv_node_map):
 
     betaU_state_node = 0.0
     for node in some_graph.nodes_iter():
-        k = inv_node_map[node]
-        node_state = global_state[k]
+        # print('node = ', node)
+        # print('global_state = ', global_state)
+        node_state = global_state[node]
         # 0 cause col vector is 2-dim:
         phi_n = all_node_pots[node][node_state, 0]
         betaU_state_node += -safe_log(phi_n)
 
     betaU_state_edge = 0.0
     for edge in some_graph.edges_iter():
+        # print('')
+        # print('getting betaU for edge', edge)
+        # print('global_state =', global_state)
         n_a, n_b = edge
-        i = inv_node_map[n_a]
-        j = inv_node_map[n_b]
-        phi_e = all_edge_pots[edge][global_state[i]][global_state[j]]
+        # print('edge_pot =', all_edge_pots[edge])
+        phi_e = all_edge_pots[edge][global_state[n_a]][global_state[n_b]]
+
         betaU_state_edge += -safe_log(phi_e)
 
     betaU_state = (betaU_state_node + betaU_state_edge)
@@ -59,6 +63,7 @@ def boltzman_sample_state_ens(state_list, betaE_list, sample_size=10):
 
     state_inds = [i for (i, _) in enumerate(state_list)]
     finite_inds = [i for i in state_inds if betaE_list[i] < np.inf and betaE_list[i] > -np.inf]
+    assert len(finite_inds) > 0, 'no states have finite energy!'
 
     finite_states = [state_list[i] for i in finite_inds]
     finite_betaE_list = [betaE_list[i] for i in finite_inds]
@@ -95,7 +100,7 @@ def calc_betaF(betaEs, sample_size, phys=True):
 
 
 # pylint: disable=too-many-locals
-def polymer_growth(g, sample_size=10, shuffle=False, phys=False):
+def polymer_growth(graph, sample_size=10, shuffle=False, phys=False):
     """
     polymer growth sampling of a protein/peptide graph
     inputs:
@@ -111,56 +116,77 @@ def polymer_growth(g, sample_size=10, shuffle=False, phys=False):
     """
 
     # get the node indices
-    nodes = np.array([n for n in g.nodes_iter()])
-    all_node_state_indices = nx.get_node_attributes(g, 'node_state_indices')
+    original_nodes = np.array([n for n in graph.nodes_iter()])
 
     # add the nodes in a random order or not
     if shuffle:
-        node_order = np.random.permutation(nodes)
+        node_order = list(np.random.permutation(original_nodes))
     else:
-        node_order = nodes
+        node_order = original_nodes
 
-    # node_map = dict(zip(nodes, node_order))
-    node_map_back = dict(zip(node_order, nodes))
+    print('shuffled node order =', node_order)
 
-    all_node_state_indices_ordered = [all_node_state_indices[k] for k in node_order]
+    # index the nodes from zero
+    node_mapping = dict(zip(node_order, xrange(len(node_order))))
+    inv_node_mapping = {v: k for k, v in node_mapping.items()}
+
+
+    # create copy of graph with nodes renamed as integers
+    g = nx.relabel_nodes(graph, node_mapping)
+
+    # if the nodes get relabeld out of order, transpose edge pot so lower index is the row
+    for m, n in g.edges():
+        if inv_node_mapping[m] > inv_node_mapping[n]:
+            g.edge[n][m]['edge_potential'] = g.edge[n][m]['edge_potential'].transpose()
+
+    print('integer nodes = ', g.nodes())
+
+    # print('')
+    # print('node potentials:')
+    # print(nx.get_node_attributes(g, 'node_potential'))
+    #
+    # print('')
+    # print('edge potentials:')
+    # print(nx.get_edge_attributes(g, 'edge_potential'))
 
     # array of delta beta F/U/TS values
-    delta_betaF = np.zeros(len(nodes))
+    delta_betaF = np.zeros(len(g.nodes()))
 
     # initialize 'polymer' -- each state is a list, saved_states is a list of lists
     saved_states = [[]]
     saved_ens = [0.0]
 
     # successively add each node, calculate delta F, and downsample the product state-space
-    for k, n in enumerate(node_order):
+    nodes = [n for n in g.nodes_iter()]
+    for node in nodes:
+        print('added node', node)
 
         # h is a temp graph with nodes/edges > i removed
         h = g.copy()
-        h.remove_nodes_from(node_order[k + 1:])
+        h.remove_nodes_from(nodes[node + 1:])
+        print('h nodes = ', h.nodes())
+
 
         new_states = []
         delta_ens = []
 
         # check all the new states we get by adding in a new node to the old states
-        for node_state in all_node_state_indices_ordered[k]:
+        for node_state in h.node[node]['node_state_indices']:
             for i, old_state in enumerate(saved_states):
                 new_state = old_state + [node_state]
                 new_states.append(new_state)
-                new_en = get_betaU_for_state(h, new_state, node_map_back)
+                new_en = get_betaU_for_state(h, new_state)
 
                 delta_en = new_en - saved_ens[i]
                 delta_ens.append(delta_en)
 
-        delta_betaF[k] = calc_betaF(delta_ens, len(saved_states))
-        saved_states = boltzman_sample_state_ens(
-            new_states, delta_ens, sample_size=sample_size)
-        saved_ens = [get_betaU_for_state(
-            h, state, node_map_back) for state in saved_states]
+        delta_betaF[node] = calc_betaF(delta_ens, len(saved_states))
+        saved_states = boltzman_sample_state_ens(new_states, delta_ens, sample_size=sample_size)
+        saved_ens = [get_betaU_for_state(h, state) for state in saved_states]
 
     # after all the nodes are added and the graph is rebuilt, compute our stats:
     betaF = np.sum(delta_betaF)
-    betaU = np.mean([get_betaU_for_state(h, state, node_map_back) for state in saved_states])
+    betaU = np.mean([get_betaU_for_state(h, state) for state in saved_states])
     betaTS = betaU - betaF
 
     if phys:
