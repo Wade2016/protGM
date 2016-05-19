@@ -124,7 +124,7 @@ def polymer_growth(graph, sample_size=10, shuffle=False, phys=False):
     else:
         node_order = original_nodes
 
-    print('shuffled node order =', node_order)
+    # print('shuffled node order =', node_order)
 
     # index the nodes from zero
     node_mapping = dict(zip(node_order, xrange(len(node_order))))
@@ -139,7 +139,7 @@ def polymer_growth(graph, sample_size=10, shuffle=False, phys=False):
         if inv_node_mapping[m] > inv_node_mapping[n]:
             g.edge[n][m]['edge_potential'] = g.edge[n][m]['edge_potential'].transpose()
 
-    print('integer nodes = ', g.nodes())
+    # print('integer nodes = ', g.nodes())
 
     # print('')
     # print('node potentials:')
@@ -159,12 +159,12 @@ def polymer_growth(graph, sample_size=10, shuffle=False, phys=False):
     # successively add each node, calculate delta F, and downsample the product state-space
     nodes = [n for n in g.nodes_iter()]
     for node in nodes:
-        print('added node', node)
+        # print('added node', node)
 
         # h is a temp graph with nodes/edges > i removed
         h = g.copy()
         h.remove_nodes_from(nodes[node + 1:])
-        print('h nodes = ', h.nodes())
+        # print('h nodes = ', h.nodes())
 
 
         new_states = []

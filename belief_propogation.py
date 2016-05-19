@@ -265,8 +265,7 @@ def calculate_betaTS_total(some_graph, node_beliefs, edge_beliefs, phys=False):
     if phys:
         d_c, d_h = some_graph.graph['num_chis']
         k_c, k_h = some_graph.graph['grid_points_per_chi']
-        discretization_correction = d_c * \
-            np.log(k_c / (2 * np.pi)) + d_h * np.log(k_h / (2 * np.pi / 3))
+        discretization_correction = d_c * np.log(k_c / (2 * np.pi)) + d_h * np.log(k_h / (2 * np.pi / 3))
         # print('BP disc corr = ', discretization_correction)
         betaTS_total -= discretization_correction
      # print 'betaTS_total = ', betaTS_total
