@@ -75,7 +75,6 @@ def ising_3_loop_pfunc_from_formula(H=1.0, J=1.0):
         np.exp(-H - J) + np.exp(3 * (-H + J))
     return Z
 
-
 # pylint: disable=too-many-locals
 def exact_pfunc(some_graph, phys=False):
     """
@@ -234,3 +233,53 @@ def exact_betaTS(some_graph, phys=False):
     betaU = exact_betaU(some_graph)
     betaTS = betaU - betaG
     return betaTS
+
+# pylint: disable=too-many-locals
+def random_pfunc(some_graph, nsamples=100, phys=False):
+    """
+    radnomly sampled partition function for any graph.
+    global state is a tuple of state indices for all nodes in the graph
+    eg, for a three node graph, global_state = (4,2,1) implies the
+    0th node in 4th state, 1st node in 2nd state, third node in 1st state.
+    nodes do not need to have the same number of possible states.
+    """
+
+    clean_up_graph(some_graph)
+
+    all_var_inds = nx.get_node_attributes(some_graph, 'node_state_indices')
+    all_node_pots = nx.get_node_attributes(some_graph, 'node_potential')
+    all_edge_pots = nx.get_edge_attributes(some_graph, 'edge_potential')
+
+    Z = 0.0
+
+    globals_states = [[np.random.choice(all_var_inds[k]) for k in all_var_inds.keys()] for _ in xrange(nsamples)]
+    for global_state in globals_states:
+        z = 0.0
+
+        z_node = 1.0
+        for node in some_graph.nodes_iter():
+            # 0 cause col vector is 2-dim
+            z_node *= all_node_pots[node][global_state[node], 0]
+
+        z_edge = 1.0
+        for edge in some_graph.edges_iter():
+            n_a, n_b = edge
+            z_edge *= all_edge_pots[edge][global_state[n_a]][global_state[n_b]]
+
+        z = z_node * z_edge
+        Z += z
+
+    if phys:
+        Z /= float(nsamples)
+    return Z
+# pylint: enable=too-many-locals
+
+
+def random_betaG(some_graph, nsamples=100, phys=False):
+    """
+    exact free energy via logZ
+    """
+    clean_up_graph(some_graph)
+
+    betaG = -np.log(random_pfunc(some_graph, nsamples=nsamples, phys=phys))
+    return betaG
